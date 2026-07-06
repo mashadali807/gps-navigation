@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:smart_route/core/utills/helpers.dart';
 import 'package:smart_route/services/map_services.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
 import 'dart:math';
 
@@ -11,8 +11,6 @@ import '../models/route_model.dart';
 import '../models/place_model.dart';
 import '../models/location_model.dart';
 import '../core/constants/app_constants.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 
 class NavigationProvider extends ChangeNotifier {
   // ============ STATE VARIABLES ============
@@ -92,6 +90,7 @@ class NavigationProvider extends ChangeNotifier {
   bool get showTraffic => _showTraffic;
   List<LatLng> get traveledPath => _traveledPath;
   List<NavigationEvent> get navigationEvents => _navigationEvents;
+  Polyline? get routePolyline => _routePolyline;
 
   // ============ COMPUTED GETTERS ============
 
@@ -104,7 +103,7 @@ class NavigationProvider extends ChangeNotifier {
   }
 
   String get formattedCurrentSpeed {
-    return AppConstants.formatSpeed(_currentSpeed / 3.6); // Convert km/h to m/s
+    return AppConstants.formatSpeed(_currentSpeed / 3.6);
   }
 
   String get formattedDistanceToDestination {
@@ -171,7 +170,6 @@ class NavigationProvider extends ChangeNotifier {
       _avoidHighways = avoidHighways;
       _avoidFerries = avoidFerries;
 
-      // Get routes
       final routes = await _getRoutes(
         origin: origin,
         destination: destination,
@@ -189,10 +187,12 @@ class NavigationProvider extends ChangeNotifier {
       _selectedRouteIndex = 0;
       _isRouteLoaded = true;
 
-      // Initialize navigation metrics
       _remainingDistance = _currentRoute!.distance;
       _remainingTime = _currentRoute!.duration;
       _distanceToDestination = _currentRoute!.distance;
+
+      // Set route polyline
+      _routePolyline = _currentRoute!.polyline;
 
       _setRouteCalculating(false);
       notifyListeners();
@@ -213,7 +213,6 @@ class NavigationProvider extends ChangeNotifier {
     RouteType type = RouteType.driving,
     int alternatives = 3,
   }) async {
-    // Get main route
     final routeData = await MapService.getRoute(
       start: origin,
       end: destination,
@@ -237,7 +236,6 @@ class NavigationProvider extends ChangeNotifier {
       type: type,
     );
 
-    // Generate alternative routes (simplified)
     final routes = <RouteModel>[mainRoute];
 
     if (alternatives > 1) {
@@ -268,6 +266,7 @@ class NavigationProvider extends ChangeNotifier {
     if (routeIndex > 0 && routeIndex < _alternativeRoutes.length) {
       _currentRoute = _alternativeRoutes[routeIndex];
       _selectedRouteIndex = routeIndex;
+      _routePolyline = _currentRoute!.polyline;
     }
 
     _isNavigating = true;
@@ -281,23 +280,19 @@ class NavigationProvider extends ChangeNotifier {
     _navigationEvents.clear();
     _lastUpdateTime = DateTime.now();
 
-    // Calculate estimated arrival
     _updateEstimatedArrival();
 
-    // Get first instruction
     if (_currentRoute!.steps.isNotEmpty) {
       _nextInstruction = _currentRoute!.steps.first.instruction;
       _nextInstructionDistance = _currentRoute!.steps.first.distance;
     }
 
-    // Add navigation start event
     _addNavigationEvent(
       type: NavigationEventType.start,
       message: 'Navigation started',
       position: _currentRoute!.startPoint,
     );
 
-    // Start position updates
     _startPositionUpdates();
 
     notifyListeners();
@@ -308,7 +303,6 @@ class NavigationProvider extends ChangeNotifier {
     _navigationTimer?.cancel();
     _positionSubscription?.cancel();
 
-    // Add navigation end event
     if (_currentPosition != null) {
       _addNavigationEvent(
         type: NavigationEventType.end,
@@ -320,13 +314,14 @@ class NavigationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Select a specific route for navigation
   void selectRoute(RouteModel route) {
     _currentRoute = route;
-    _routePolyline = route.polyline as Polyline?;
+    _routePolyline = route.polyline;
     _remainingDistance = route.distance;
     _remainingTime = route.duration;
     _distanceToDestination = route.distance;
+    _progress = 0.0;
+    _currentStepIndex = 0;
     notifyListeners();
   }
 
@@ -350,6 +345,7 @@ class NavigationProvider extends ChangeNotifier {
 
     _selectedRouteIndex = index;
     _currentRoute = _alternativeRoutes[index];
+    _routePolyline = _currentRoute!.polyline;
     _remainingDistance = _currentRoute!.distance;
     _remainingTime = _currentRoute!.duration;
     _distanceToDestination = _currentRoute!.distance;
@@ -369,25 +365,13 @@ class NavigationProvider extends ChangeNotifier {
     _currentSpeed = speed;
     _lastUpdateTime = DateTime.now();
 
-    // Add to traveled path
     _traveledPath.add(position);
-
-    // Update route progress
     _updateRouteProgress(position);
-
-    // Update navigation metrics
     _updateMetrics(position);
-
-    // Update next instruction
     _updateNextInstruction(position);
-
-    // Check if arrived
     _checkArrival();
-
-    // Update estimated arrival
     _updateEstimatedArrival();
 
-    // Add navigation update event
     _addNavigationEvent(
       type: NavigationEventType.update,
       message: 'Position updated',
@@ -405,14 +389,12 @@ class NavigationProvider extends ChangeNotifier {
   void _updateRouteProgress(LatLng position) {
     if (_currentRoute == null || _currentRoute!.points.isEmpty) return;
 
-    // Calculate progress based on distance to destination
     final totalDistance = _currentRoute!.distance;
     final remainingDistance = _calculateRemainingDistance(position);
     _remainingDistance = remainingDistance;
     _progress = 1.0 - (remainingDistance / totalDistance);
     _progress = _progress.clamp(0.0, 1.0);
 
-    // Update step index
     _updateStepIndex(position);
   }
 
@@ -438,7 +420,6 @@ class NavigationProvider extends ChangeNotifier {
       }
     }
 
-    // Only move forward
     if (closestStep >= _currentStepIndex) {
       _currentStepIndex = closestStep;
     }
@@ -447,19 +428,16 @@ class NavigationProvider extends ChangeNotifier {
   void _updateMetrics(LatLng position) {
     if (_currentRoute == null) return;
 
-    // Calculate remaining distance
     _remainingDistance = _calculateRemainingDistance(position);
 
-    // Calculate remaining time based on current speed
     if (_currentSpeed > 0) {
-      final estimatedTime = _remainingDistance / _currentSpeed; // hours
-      _remainingTime = estimatedTime * 60; // minutes
+      final estimatedTime = _remainingDistance / _currentSpeed;
+      _remainingTime = estimatedTime * 60;
     } else {
-      // Use average speed from route
       final avgSpeed = _currentRoute!.distance / (_currentRoute!.duration / 60);
       if (avgSpeed > 0) {
-        final estimatedTime = _remainingDistance / avgSpeed; // hours
-        _remainingTime = estimatedTime * 60; // minutes
+        final estimatedTime = _remainingDistance / avgSpeed;
+        _remainingTime = estimatedTime * 60;
       }
     }
 
@@ -469,7 +447,6 @@ class NavigationProvider extends ChangeNotifier {
   double _calculateRemainingDistance(LatLng position) {
     if (_currentRoute == null) return 0;
 
-    // Find closest point on route
     double minDistance = double.infinity;
     int closestIndex = 0;
 
@@ -487,7 +464,6 @@ class NavigationProvider extends ChangeNotifier {
       }
     }
 
-    // Calculate remaining distance from closest point to end
     double remaining = 0;
     for (int i = closestIndex; i < _currentRoute!.points.length - 1; i++) {
       final p1 = _currentRoute!.points[i];
@@ -506,7 +482,6 @@ class NavigationProvider extends ChangeNotifier {
   void _updateNextInstruction(LatLng position) {
     if (_currentRoute == null || _currentRoute!.steps.isEmpty) return;
 
-    // Get next unvisited step
     for (int i = _currentStepIndex; i < _currentRoute!.steps.length; i++) {
       final step = _currentRoute!.steps[i];
       if (step.points.isEmpty) continue;
@@ -520,7 +495,6 @@ class NavigationProvider extends ChangeNotifier {
       );
 
       if (distance < 0.1) {
-        // Within 100 meters
         _nextInstruction = step.instruction;
         _nextInstructionDistance = step.distance;
         _nextWaypoint = step.points.last;
@@ -538,7 +512,6 @@ class NavigationProvider extends ChangeNotifier {
 
   void _checkArrival() {
     if (_remainingDistance < 0.05) {
-      // Within 50 meters
       _onArrive();
     }
   }
@@ -564,10 +537,7 @@ class NavigationProvider extends ChangeNotifier {
     _navigationTimer = Timer.periodic(
       const Duration(seconds: AppConstants.locationUpdateInterval),
       (timer) {
-        // Simulate position updates if no real position stream
-        // In production, this would come from LocationService
         if (_currentPosition != null) {
-          // Update position slightly along route
           _simulatePositionUpdate();
         }
       },
@@ -577,11 +547,9 @@ class NavigationProvider extends ChangeNotifier {
   void _simulatePositionUpdate() {
     if (_currentRoute == null || !_isNavigating) return;
 
-    // Simulate moving along route
     final points = _currentRoute!.points;
     if (points.isEmpty) return;
 
-    // Find current index
     int currentIndex = 0;
     double minDistance = double.infinity;
     for (int i = 0; i < points.length; i++) {
@@ -598,14 +566,11 @@ class NavigationProvider extends ChangeNotifier {
       }
     }
 
-    // Move to next point
     final nextIndex = min(currentIndex + 2, points.length - 1);
     final nextPoint = points[nextIndex];
 
-    // Interpolate speed
-    final speed = _currentSpeed > 0 ? _currentSpeed : 30; // Default 30 km/h
+    final speed = _currentSpeed > 0 ? _currentSpeed : 30;
 
-    // Calculate new position (simplified)
     final latDiff = nextPoint.latitude - (points[currentIndex].latitude);
     final lngDiff = nextPoint.longitude - (points[currentIndex].longitude);
     final steps = max(1, (speed / 10).round());
@@ -707,8 +672,6 @@ class NavigationProvider extends ChangeNotifier {
   }
 }
 
-class Polyline {}
-
 // ============ NAVIGATION EVENT MODEL ============
 
 class NavigationEvent {
@@ -763,27 +726,18 @@ class NavigationEvent {
 enum NavigationEventType { start, update, arrive, end, reroute, error, warning }
 
 // ============ NAVIGATION PROVIDER EXTENSIONS ============
+
 extension NavigationProviderExtension on BuildContext {
   NavigationProvider get navigation =>
       Provider.of<NavigationProvider>(this, listen: false);
 
-  // Change from method to getter
   NavigationProvider get watchNavigation =>
       Provider.of<NavigationProvider>(this, listen: true);
 
-  /// Check if currently navigating
   bool get isNavigating => watchNavigation.isNavigating;
-
-  /// Get current route
   RouteModel? get currentRoute => watchNavigation.currentRoute;
-
-  /// Get remaining distance formatted
   String get remainingDistance => watchNavigation.formattedRemainingDistance;
-
-  /// Get remaining time formatted
   String get remainingTime => watchNavigation.formattedRemainingTime;
-
-  /// Get current speed formatted
   String get currentSpeed => watchNavigation.formattedCurrentSpeed;
 }
 
@@ -915,7 +869,6 @@ class _RouteOptionsWidgetState extends State<RouteOptionsWidget> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-            // Route type
             DropdownButtonFormField<RouteType>(
               value: _routeType,
               decoration: const InputDecoration(
@@ -936,7 +889,6 @@ class _RouteOptionsWidgetState extends State<RouteOptionsWidget> {
               },
             ),
             const SizedBox(height: 12),
-            // Checkboxes
             SwitchListTile(
               title: const Text('Avoid Tolls'),
               value: _avoidTolls,

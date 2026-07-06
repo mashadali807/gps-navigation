@@ -28,6 +28,7 @@ class _SearchScreenState extends State<SearchScreen> {
   final FocusNode _focusNode = FocusNode();
 
   List<SearchResult> _searchResults = [];
+  List<PlaceModel> _recentSearches = [];
   bool _isLoading = false;
   bool _isSearching = false;
   String? _error;
@@ -36,7 +37,23 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   void initState() {
     super.initState();
+    _loadRecentSearches();
     _focusNode.requestFocus();
+  }
+
+  void _loadRecentSearches() {
+    // Load from storage in a real app
+    _recentSearches = [];
+  }
+
+  void _addToRecentSearches(PlaceModel place) {
+    setState(() {
+      _recentSearches.removeWhere((p) => p.id == place.id);
+      _recentSearches.insert(0, place);
+      if (_recentSearches.length > 10) {
+        _recentSearches.removeLast();
+      }
+    });
   }
 
   Future<void> _searchLocation(String query) async {
@@ -64,6 +81,13 @@ class _SearchScreenState extends State<SearchScreen> {
         _isLoading = false;
         _isSearching = false;
       });
+
+      if (results.isEmpty) {
+        setState(() {
+          _error =
+              'No results found for "$query". Please try a different search.';
+        });
+      }
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -77,32 +101,11 @@ class _SearchScreenState extends State<SearchScreen> {
     final mapProvider = context.read<MapProvider>();
     final location = LatLng(result.latitude, result.longitude);
 
-    // Move map to location
-    mapProvider.moveTo(location, zoom: 15);
+    final place = result.toPlaceModel();
+    _addToRecentSearches(place);
 
-    // Add marker
-    final marker = Marker(
-      point: location,
-      width: 40,
-      height: 40,
-      key: Key('search_${DateTime.now().millisecondsSinceEpoch}'),
-      child: Container(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.red,
-          border: Border.all(color: Colors.white, width: 2),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.red.withOpacity(0.3),
-              blurRadius: 8,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
-        child: const Icon(Icons.flag, color: Colors.white, size: 20),
-      ),
-    );
-    mapProvider.addMarker(marker);
+    mapProvider.selectPlace(place);
+    mapProvider.moveTo(location, zoom: 15);
 
     _searchController.clear();
     setState(() {
@@ -111,8 +114,53 @@ class _SearchScreenState extends State<SearchScreen> {
       _showRecentSearches = true;
     });
 
-    // Navigate back to home using GoRouter
-    context.go('/home');
+    context.go('/home', extra: {'selectedPlace': place});
+  }
+
+  void _navigateToPlace(PlaceModel place) {
+    final mapProvider = context.read<MapProvider>();
+    final location = LatLng(place.latitude, place.longitude);
+
+    mapProvider.selectPlace(place);
+    mapProvider.moveTo(location, zoom: 15);
+
+    context.go('/home', extra: {'selectedPlace': place});
+  }
+
+  void _calculateRoute(PlaceModel place) {
+    final locationProvider = context.read<LocationProvider>();
+
+    if (locationProvider.currentPosition == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Current location not available'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final origin = LatLng(
+      locationProvider.currentPosition!.latitude,
+      locationProvider.currentPosition!.longitude,
+    );
+    final destination = LatLng(place.latitude, place.longitude);
+
+    context.go(
+      '/route-preview',
+      extra: {
+        'route': RouteModel(
+          points: [origin, destination],
+          distance: 0,
+          duration: 0,
+          origin: PlaceModel.currentLocation(
+            latitude: origin.latitude,
+            longitude: origin.longitude,
+          ),
+          destination: place,
+        ),
+      },
+    );
   }
 
   @override
@@ -334,25 +382,135 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   Widget _buildRecentAndFavorites(ThemeData theme, bool isDark) {
+    if (_recentSearches.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(AppConstants.paddingLarge),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Recent Searches',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: AppConstants.paddingSmall),
+            Container(
+              padding: const EdgeInsets.all(AppConstants.paddingLarge),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.grey[800] : Colors.grey[100],
+                borderRadius: BorderRadius.circular(AppConstants.radiusMedium),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.history,
+                    size: 48,
+                    color: isDark ? Colors.grey[600] : Colors.grey[400],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'No recent searches',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: isDark ? Colors.grey[500] : Colors.grey[400],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(AppConstants.paddingMedium),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Recent Searches (for demonstration only - remove hardcoded data)
-          if (_searchController.text.isEmpty)
+          if (_recentSearches.isNotEmpty)
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Recent Searches',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _recentSearches.clear();
+                        });
+                      },
+                      child: const Text('Clear All'),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: AppConstants.paddingSmall),
-                Text(
-                  'Search for places',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: isDark ? Colors.grey[500] : Colors.grey[400],
-                  ),
+                ..._recentSearches.map(
+                  (place) => _buildRecentItem(theme, isDark, place),
                 ),
               ],
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecentItem(ThemeData theme, bool isDark, PlaceModel place) {
+    return GlassmorphicCard(
+      padding: const EdgeInsets.all(AppConstants.paddingMedium),
+      margin: const EdgeInsets.only(bottom: AppConstants.paddingSmall),
+      onTap: () => _navigateToPlace(place),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.grey.withOpacity(0.1),
+            ),
+            child: Icon(
+              Icons.history,
+              color: isDark ? Colors.grey[400] : Colors.grey[600],
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: AppConstants.paddingMedium),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  place.name,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (place.address != null)
+                  Text(
+                    place.address!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: isDark ? Colors.grey[400] : Colors.grey[600],
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: () => _calculateRoute(place),
+            icon: Icon(Icons.navigation, color: theme.primaryColor, size: 20),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
         ],
       ),
     );
