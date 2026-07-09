@@ -13,7 +13,11 @@ import '../core/constants/app_constants.dart';
 class LocationService {
   final GeolocatorPlatform _geolocator = GeolocatorPlatform.instance;
 
-  Stream<Position>? _positionStream;
+  // FIXED: Use a broadcast stream controller so multiple listeners can subscribe
+  final StreamController<Position> _positionController =
+      StreamController<Position>.broadcast();
+
+  StreamSubscription<Position>? _positionStreamSubscription;
   Stream<ServiceStatus>? _serviceStatusStream;
   bool _isTracking = false;
   bool _isGpsEnabled = false;
@@ -44,35 +48,21 @@ class LocationService {
   double get totalDistance => _totalDistance;
   double get currentHeading => _currentHeading;
 
-  /// Get position stream
+  /// FIXED: Get position stream - now returns the broadcast stream
   Stream<Position> get positionStream {
-    if (_positionStream == null) {
-      throw Exception('Location tracking not started');
-    }
-    return _positionStream!;
+    return _positionController.stream;
   }
 
   // ============ PERMISSION METHODS ============
 
-  /// Check location permission status
   Future<PermissionStatus> checkPermission() async {
     return await Permission.location.status;
   }
 
-  /// Request location permission
   Future<bool> requestPermission() async {
     try {
       final status = await Permission.location.request();
       _hasPermission = status.isGranted;
-
-      if (_hasPermission) {
-        final backgroundStatus = await Permission.locationAlways.status;
-        if (!backgroundStatus.isGranted) {
-          // Optionally request background permission
-          // await Permission.locationAlways.request();
-        }
-      }
-
       return _hasPermission;
     } catch (e) {
       Helpers.logError(e, tag: 'LocationService.requestPermission');
@@ -80,7 +70,6 @@ class LocationService {
     }
   }
 
-  /// Check if location service is enabled
   Future<bool> isLocationServiceEnabled() async {
     try {
       _isGpsEnabled = await _geolocator.isLocationServiceEnabled();
@@ -91,19 +80,16 @@ class LocationService {
     }
   }
 
-  /// Open location settings
   Future<void> openLocationSettings() async {
     await Geolocator.openLocationSettings();
   }
 
-  /// Open app settings
   Future<void> openAppSettings() async {
     await Geolocator.openAppSettings();
   }
 
   // ============ GPS STATUS ============
 
-  /// Get GPS status stream
   Stream<ServiceStatus> getServiceStatusStream() {
     _serviceStatusStream ??= Geolocator.getServiceStatusStream();
     return _serviceStatusStream!;
@@ -111,29 +97,53 @@ class LocationService {
 
   // ============ POSITION METHODS ============
 
-  /// Get current position
   Future<Position> getCurrentPosition({
     LocationAccuracy accuracy = LocationAccuracy.high,
-    int timeLimit = 5000,
+    int timeLimit = 15000,
   }) async {
     try {
-      final settings = LocationSettings(
-        accuracy: accuracy,
-        timeLimit: Duration(milliseconds: timeLimit),
-      );
-
-      _lastPosition = await _geolocator.getCurrentPosition(
-        locationSettings: settings,
-      );
-      _lastUpdateTime = DateTime.now();
-      return _lastPosition!;
+      // Try with high accuracy first
+      try {
+        final settings = LocationSettings(
+          accuracy: accuracy,
+          timeLimit: Duration(milliseconds: timeLimit),
+        );
+        _lastPosition = await _geolocator.getCurrentPosition(
+          locationSettings: settings,
+        );
+        _lastUpdateTime = DateTime.now();
+        return _lastPosition!;
+      } catch (e) {
+        // If high accuracy fails, try with medium
+        try {
+          final settings = LocationSettings(
+            accuracy: LocationAccuracy.medium,
+            timeLimit: const Duration(milliseconds: 10000),
+          );
+          _lastPosition = await _geolocator.getCurrentPosition(
+            locationSettings: settings,
+          );
+          _lastUpdateTime = DateTime.now();
+          return _lastPosition!;
+        } catch (e2) {
+          // If medium fails, try with low
+          final settings = LocationSettings(
+            accuracy: LocationAccuracy.low,
+            timeLimit: const Duration(milliseconds: 5000),
+          );
+          _lastPosition = await _geolocator.getCurrentPosition(
+            locationSettings: settings,
+          );
+          _lastUpdateTime = DateTime.now();
+          return _lastPosition!;
+        }
+      }
     } catch (e) {
       Helpers.logError(e, tag: 'LocationService.getCurrentPosition');
       rethrow;
     }
   }
 
-  /// Get last known position
   Future<Position?> getLastKnownPosition() async {
     try {
       return await _geolocator.getLastKnownPosition();
@@ -145,7 +155,6 @@ class LocationService {
 
   // ============ TRACKING METHODS ============
 
-  /// Start tracking position
   void startTracking({
     Duration interval = const Duration(
       seconds: AppConstants.locationUpdateInterval,
@@ -153,30 +162,33 @@ class LocationService {
     int distanceFilter = AppConstants.locationDistanceFilter,
     LocationAccuracy accuracy = LocationAccuracy.high,
   }) {
-    if (_isTracking) return;
+    if (_isTracking) {
+      // If already tracking, restart to ensure fresh stream
+      stopTracking();
+    }
 
     try {
+      // FIXED: Removed intervalDuration - it doesn't exist in LocationSettings
+      // The interval is controlled by distanceFilter and accuracy
       final settings = LocationSettings(
         accuracy: accuracy,
         distanceFilter: distanceFilter,
-        timeLimit: interval,
       );
 
-      _positionStream = _geolocator.getPositionStream(
-        locationSettings: settings,
-      );
+      // FIXED: Properly listen to position stream and add to controller
+      _positionStreamSubscription = _geolocator
+          .getPositionStream(locationSettings: settings)
+          .listen(
+            (Position position) {
+              _handlePositionUpdate(position);
+              // FIXED: Add position to the broadcast stream controller
+              _positionController.add(position);
+            },
+            onError: _handlePositionError,
+            onDone: _handleStreamDone,
+          );
 
       _isTracking = true;
-
-      _positionStream!.listen(
-        _handlePositionUpdate,
-        onError: _handlePositionError,
-        onDone: _handleStreamDone,
-      );
-
-      // Start heading tracking
-      _startHeadingTracking();
-
       Helpers.log('Location tracking started', tag: 'LocationService');
     } catch (e) {
       Helpers.logError(e, tag: 'LocationService.startTracking');
@@ -184,32 +196,28 @@ class LocationService {
     }
   }
 
-  /// Stop tracking position
   void stopTracking() {
     if (!_isTracking) return;
 
-    _positionStream = null;
+    _positionStreamSubscription?.cancel();
+    _positionStreamSubscription = null;
     _isTracking = false;
     _lastTrackedPosition = null;
 
-    // Stop heading tracking
-    _stopHeadingTracking();
-
+    // Don't close the controller, just stop adding to it
     Helpers.log('Location tracking stopped', tag: 'LocationService');
   }
 
-  /// Pause tracking
   void pauseTracking() {
     if (!_isTracking) return;
-    _positionStream = null;
+    _positionStreamSubscription?.pause();
     _isTracking = false;
-    _stopHeadingTracking();
   }
 
-  /// Resume tracking
   void resumeTracking() {
     if (_isTracking) return;
-    startTracking();
+    _positionStreamSubscription?.resume();
+    _isTracking = true;
   }
 
   // ============ HEADING TRACKING ============
@@ -217,7 +225,6 @@ class LocationService {
   void _startHeadingTracking() {
     _accelerometerSubscription = accelerometerEvents.listen(
       (event) {
-        // Calculate heading from accelerometer data
         final heading = (180 / pi) * atan2(event.x, event.y);
         _currentHeading = heading >= 0 ? heading : heading + 360;
       },
@@ -232,7 +239,6 @@ class LocationService {
     _accelerometerSubscription = null;
   }
 
-  /// Get device heading from sensors
   Future<double> getDeviceHeading() async {
     return _currentHeading;
   }
@@ -246,11 +252,16 @@ class LocationService {
     _addToHistory(position);
     _trackDistance(position);
     _isGpsEnabled = true;
+
+    // Start heading tracking if not already
+    if (_accelerometerSubscription == null) {
+      _startHeadingTracking();
+    }
   }
 
   void _handlePositionError(dynamic error) {
     Helpers.logError(error, tag: 'LocationService.positionError');
-    _isTracking = false;
+    // Don't stop tracking on error, just log it
   }
 
   void _handleStreamDone() {
@@ -342,13 +353,17 @@ class LocationService {
     String? city,
     String? country,
   }) {
+    final heading = position.heading.isFinite && position.heading >= 0
+        ? position.heading
+        : _currentHeading;
+
     return LocationModel(
       latitude: position.latitude,
       longitude: position.longitude,
       accuracy: position.accuracy,
-      speed: position.speed,
-      heading: _currentHeading, // Use current heading from sensors
-      altitude: position.altitude,
+      speed: position.speed >= 0 ? position.speed : 0.0,
+      heading: heading,
+      altitude: position.altitude >= 0 ? position.altitude : 0.0,
       address: address,
       city: city,
       country: country,
@@ -494,6 +509,7 @@ class LocationService {
 
   void dispose() {
     stopTracking();
+    _positionController.close();
     _locationHistory.clear();
     _lastTrackedPosition = null;
     _stopHeadingTracking();
@@ -585,7 +601,7 @@ class LocationStreamBuilder extends StatelessWidget {
     final locationService = service ?? LocationService();
 
     return StreamBuilder<Position>(
-      stream: locationService._positionStream,
+      stream: locationService.positionStream,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return errorWidget ??

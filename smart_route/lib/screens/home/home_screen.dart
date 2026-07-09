@@ -277,7 +277,7 @@ class _HomeScreenState extends State<HomeScreen>
       duration: _routeDuration > 0 ? _routeDuration : 0,
       origin: originPlace,
       destination:
-          _destinationPlace ??
+      _destinationPlace ??
           PlaceModel(
             name: 'Destination',
             latitude: _destination!.latitude,
@@ -386,7 +386,11 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       ),
       children: [
-        MapService.getTileLayer(darkMode: isDark),
+        // FIXED: Pass darkMode parameter correctly for dark mode support
+        MapService.getTileLayer(
+          darkMode: isDark,
+          satellite: false,
+        ),
 
         if (locationProvider.currentPosition != null)
           MarkerLayer(
@@ -553,17 +557,17 @@ class _HomeScreenState extends State<HomeScreen>
             ),
             child: _isCalculatingRoute
                 ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            )
                 : const Text(
-                    'Go',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-                  ),
+              'Go',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+            ),
           ),
 
           const SizedBox(width: 2),
@@ -665,12 +669,12 @@ class _HomeScreenState extends State<HomeScreen>
                         : null,
                     child: authProvider.currentUser?.photoUrl == null
                         ? Text(
-                            authProvider.currentUser?.initials ?? 'U',
-                            style: TextStyle(
-                              color: theme.primaryColor,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          )
+                      authProvider.currentUser?.initials ?? 'U',
+                      style: TextStyle(
+                        color: theme.primaryColor,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    )
                         : null,
                   ),
                 ),
@@ -783,10 +787,10 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildLocationInfo(
-    ThemeData theme,
-    bool isDark,
-    LocationProvider locationProvider,
-  ) {
+      ThemeData theme,
+      bool isDark,
+      LocationProvider locationProvider,
+      ) {
     return AnimatedOpacity(
       opacity: _showLocationInfo ? 1.0 : 0.0,
       duration: const Duration(milliseconds: 300),

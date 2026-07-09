@@ -242,6 +242,7 @@ class LocationProvider extends ChangeNotifier {
       _addToHistory(_currentLocation!);
     }
 
+    // CRITICAL: Notify listeners so UI updates
     notifyListeners();
   }
 

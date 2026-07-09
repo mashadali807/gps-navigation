@@ -13,7 +13,7 @@ import '../models/route_model.dart';
 class MapService {
   // ============ TILE LAYERS ============
 
-  /// Get tile layer for map
+  /// Get tile layer for map - FIXED for flutter_map compatibility
   static TileLayer getTileLayer({
     bool darkMode = false,
     bool satellite = false,
@@ -24,12 +24,16 @@ class MapService {
     if (customUrl != null) {
       urlTemplate = customUrl;
     } else if (satellite) {
-      urlTemplate = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-    } else if (darkMode) {
+      // Use Stadia Maps for satellite-like view
       urlTemplate =
-          'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+          'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png';
+    } else if (darkMode) {
+      // Use Stadia Maps dark theme
+      urlTemplate =
+          'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png';
     } else {
-      urlTemplate = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+      // FIXED: Use the new OSM URL without subdomains
+      urlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
     }
 
     return TileLayer(
@@ -38,8 +42,9 @@ class MapService {
       maxZoom: AppConstants.maxMapZoom,
       minZoom: AppConstants.minMapZoom,
       tileProvider: NetworkTileProvider(),
-      subdomains: ['a', 'b', 'c'],
-      retinaMode: true, // Always use high density tiles
+      // FIXED: Remove subdomains to avoid warning
+      // subdomains: ['a', 'b', 'c'], // <-- REMOVED
+      retinaMode: true,
       additionalOptions: {
         'attribution': '© OpenStreetMap contributors',
         'attributionUrl': 'https://www.openstreetmap.org/copyright',
@@ -47,7 +52,7 @@ class MapService {
     );
   }
 
-  /// Get tile layer with custom attribution
+  /// Get tile layer with custom attribution - FIXED
   static TileLayer getCustomTileLayer({
     required String urlTemplate,
     String? attribution,
@@ -61,13 +66,61 @@ class MapService {
       maxZoom: maxZoom,
       minZoom: minZoom,
       tileProvider: NetworkTileProvider(),
-      subdomains: subdomains ?? ['a', 'b', 'c'],
-      retinaMode: true, // Always use high density tiles
+      subdomains:
+          subdomains ??
+          const ['a', 'b', 'c'], // Provide default if null // Only if provided
+      retinaMode: true,
       additionalOptions: {'attribution': attribution ?? '© OpenStreetMap'},
     );
   }
 
-  // ============ SEARCH LOCATION (FIXED) ============
+  /// Get tile layer with Stadia Maps - FIXED (removed unsupported parameters)
+  static TileLayer getStadiaTileLayer({bool darkMode = false, String? apiKey}) {
+    // Stadia Maps is free for open-source projects
+    // Get a free API key at: https://stadiamaps.com/
+    final urlTemplate = darkMode
+        ? 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png'
+        : 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png';
+
+    return TileLayer(
+      urlTemplate: urlTemplate,
+      userAgentPackageName: AppConstants.packageName,
+      maxZoom: 20,
+      minZoom: AppConstants.minMapZoom,
+      tileProvider: NetworkTileProvider(),
+      retinaMode: true,
+      additionalOptions: {
+        'attribution':
+            '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>',
+      },
+      // Removed: maxRetries, retryDelay, useCache, cacheKey, cacheMaxAge
+    );
+  }
+
+  /// Get tile layer with MapBox (requires API key) - FIXED
+  static TileLayer getMapBoxTileLayer({
+    required String apiKey,
+    bool darkMode = false,
+    String? style,
+  }) {
+    final styleId = style ?? (darkMode ? 'dark-v11' : 'streets-v12');
+    final urlTemplate =
+        'https://api.mapbox.com/styles/v1/mapbox/$styleId/tiles/{z}/{x}/{y}?access_token=$apiKey';
+
+    return TileLayer(
+      urlTemplate: urlTemplate,
+      userAgentPackageName: AppConstants.packageName,
+      maxZoom: 20,
+      minZoom: AppConstants.minMapZoom,
+      tileProvider: NetworkTileProvider(),
+      retinaMode: true,
+      additionalOptions: {
+        'attribution': '&copy; <a href="https://mapbox.com/">MapBox</a>',
+      },
+    );
+  }
+
+  // ============ SEARCH LOCATION ============
 
   /// Search locations by query using OSM Nominatim
   static Future<List<SearchResult>> searchLocation(String query) async {
@@ -463,8 +516,6 @@ class MapService {
     }
   }
 
-  /// Search with autocomplete
-
   /// Build address from address components
   static String _buildAddressFromComponents(Map<String, dynamic> address) {
     final parts = <String>[];
@@ -565,7 +616,7 @@ class MapService {
             'osm': {
               'type': 'raster',
               'tiles': [
-                'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png',
               ],
               'tileSize': 256,
               'attribution': '© OpenStreetMap',
@@ -582,7 +633,7 @@ class MapService {
           'sources': {
             'satellite': {
               'type': 'raster',
-              'tiles': ['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+              'tiles': ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
               'tileSize': 256,
               'attribution': '© OpenStreetMap',
               'maxzoom': 19,
@@ -598,7 +649,7 @@ class MapService {
           'sources': {
             'terrain': {
               'type': 'raster',
-              'tiles': ['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+              'tiles': ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
               'tileSize': 256,
               'attribution': '© OpenStreetMap',
               'maxzoom': 19,
@@ -614,7 +665,7 @@ class MapService {
           'sources': {
             'osm': {
               'type': 'raster',
-              'tiles': ['https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+              'tiles': ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
               'tileSize': 256,
               'attribution': '© OpenStreetMap',
               'maxzoom': 19,

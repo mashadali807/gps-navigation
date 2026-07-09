@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:smart_route/models/search_result_model.dart' hide SearchResult;
 import 'package:smart_route/services/map_services.dart';
+import 'dart:async';
 
 import '../../providers/location_provider.dart';
 import '../../providers/map_provider.dart';
@@ -34,6 +35,10 @@ class _SearchScreenState extends State<SearchScreen> {
   String? _error;
   bool _showRecentSearches = true;
 
+  // Debounce timer to prevent too many API calls
+  Timer? _debounceTimer;
+  String _lastSearchedQuery = '';
+
   @override
   void initState() {
     super.initState();
@@ -56,44 +61,83 @@ class _SearchScreenState extends State<SearchScreen> {
     });
   }
 
-  Future<void> _searchLocation(String query) async {
+  void _onSearchChanged(String query) {
+    // Cancel previous debounce timer
+    _debounceTimer?.cancel();
+
+    // If query is empty, clear results immediately
     if (query.trim().isEmpty) {
       setState(() {
         _searchResults.clear();
         _isSearching = false;
         _showRecentSearches = true;
+        _error = null;
       });
       return;
     }
 
+    // Show loading state immediately for user feedback
     setState(() {
       _isSearching = true;
-      _isLoading = true;
       _error = null;
       _showRecentSearches = false;
+    });
+
+    // Debounce search - wait 500ms after user stops typing
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+      _performSearch(query.trim());
+    });
+  }
+
+  Future<void> _performSearch(String query) async {
+    // Don't search if query is empty or same as last search
+    if (query.isEmpty) return;
+    if (query == _lastSearchedQuery && _searchResults.isNotEmpty) return;
+
+    _lastSearchedQuery = query;
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
     });
 
     try {
       final results = await MapService.searchLocation(query);
 
-      setState(() {
-        _searchResults = results;
-        _isLoading = false;
-        _isSearching = false;
-      });
-
-      if (results.isEmpty) {
+      if (mounted) {
         setState(() {
-          _error =
-              'No results found for "$query". Please try a different search.';
+          _searchResults = results;
+          _isLoading = false;
+          _isSearching = false;
         });
+
+        if (results.isEmpty) {
+          setState(() {
+            _error =
+                'No results found for "$query". Please try a different search.';
+          });
+        }
       }
     } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _isLoading = false;
-        _isSearching = false;
-      });
+      if (mounted) {
+        // Check if it's a network/connection error
+        String errorMessage = e.toString();
+        if (errorMessage.contains('SocketException') ||
+            errorMessage.contains('Connection') ||
+            errorMessage.contains('timeout')) {
+          errorMessage =
+              'Network error. Please check your internet connection.';
+        } else if (errorMessage.contains('429')) {
+          errorMessage =
+              'Too many requests. Please wait a moment and try again.';
+        }
+
+        setState(() {
+          _error = errorMessage;
+          _isLoading = false;
+          _isSearching = false;
+        });
+      }
     }
   }
 
@@ -112,6 +156,7 @@ class _SearchScreenState extends State<SearchScreen> {
       _searchResults.clear();
       _isSearching = false;
       _showRecentSearches = true;
+      _error = null;
     });
 
     context.go('/home', extra: {'selectedPlace': place});
@@ -163,8 +208,22 @@ class _SearchScreenState extends State<SearchScreen> {
     );
   }
 
+  void _clearSearch() {
+    _debounceTimer?.cancel();
+    _searchController.clear();
+    setState(() {
+      _searchResults.clear();
+      _isSearching = false;
+      _showRecentSearches = true;
+      _error = null;
+      _lastSearchedQuery = '';
+    });
+    _focusNode.requestFocus();
+  }
+
   @override
   void dispose() {
+    _debounceTimer?.cancel();
     _searchController.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -178,7 +237,13 @@ class _SearchScreenState extends State<SearchScreen> {
     return Scaffold(
       backgroundColor: isDark ? Colors.grey[900] : Colors.grey[50],
       appBar: AppBar(
-        title: const Text('Search Places'),
+        title: Text(
+          'Search Places',
+          style: TextStyle(
+            color: isDark ? Colors.white : Colors.black87,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
@@ -189,21 +254,14 @@ class _SearchScreenState extends State<SearchScreen> {
           onPressed: () => context.go('/home'),
         ),
         actions: [
-          IconButton(
-            onPressed: () {
-              _searchController.clear();
-              setState(() {
-                _searchResults.clear();
-                _isSearching = false;
-                _showRecentSearches = true;
-                _error = null;
-              });
-            },
-            icon: Icon(
-              Icons.close,
-              color: isDark ? Colors.white : Colors.black87,
+          if (_searchController.text.isNotEmpty || _searchResults.isNotEmpty)
+            IconButton(
+              onPressed: _clearSearch,
+              icon: Icon(
+                Icons.close,
+                color: isDark ? Colors.white : Colors.black87,
+              ),
             ),
-          ),
         ],
       ),
       body: Column(
@@ -235,30 +293,29 @@ class _SearchScreenState extends State<SearchScreen> {
               decoration: BoxDecoration(
                 color: isDark ? Colors.grey[800] : Colors.grey[100],
                 borderRadius: BorderRadius.circular(AppConstants.radiusMedium),
+                border: Border.all(
+                  color: _isSearching ? theme.primaryColor : Colors.transparent,
+                  width: 2,
+                ),
               ),
               child: TextField(
                 controller: _searchController,
                 focusNode: _focusNode,
-                onChanged: _searchLocation,
+                onChanged: _onSearchChanged,
                 decoration: InputDecoration(
                   hintText: 'Search places...',
                   hintStyle: TextStyle(
                     color: isDark ? Colors.grey[500] : Colors.grey[400],
                   ),
                   prefixIcon: Icon(
-                    Icons.search,
-                    color: isDark ? Colors.grey[500] : Colors.grey[400],
+                    _isSearching ? Icons.search : Icons.search,
+                    color: _isSearching
+                        ? theme.primaryColor
+                        : (isDark ? Colors.grey[500] : Colors.grey[400]),
                   ),
                   suffixIcon: _searchController.text.isNotEmpty
                       ? IconButton(
-                          onPressed: () {
-                            _searchController.clear();
-                            setState(() {
-                              _searchResults.clear();
-                              _isSearching = false;
-                              _showRecentSearches = true;
-                            });
-                          },
+                          onPressed: _clearSearch,
                           icon: Icon(
                             Icons.clear,
                             color: isDark ? Colors.grey[500] : Colors.grey[400],
@@ -272,7 +329,10 @@ class _SearchScreenState extends State<SearchScreen> {
                     vertical: AppConstants.paddingSmall,
                   ),
                 ),
-                style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                style: TextStyle(
+                  color: isDark ? Colors.white : Colors.black87,
+                  fontSize: 16,
+                ),
               ),
             ),
           ),
@@ -282,7 +342,7 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   Widget _buildContent(ThemeData theme, bool isDark) {
-    if (_isSearching) {
+    if (_isSearching && _searchResults.isEmpty) {
       return _buildLoadingState(theme);
     }
 
@@ -383,39 +443,27 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildRecentAndFavorites(ThemeData theme, bool isDark) {
     if (_recentSearches.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(AppConstants.paddingLarge),
+      return Center(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            Icon(
+              Icons.history,
+              size: 64,
+              color: isDark ? Colors.grey[700] : Colors.grey[300],
+            ),
+            const SizedBox(height: 16),
             Text(
-              'Recent Searches',
+              'No recent searches',
               style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
+                color: isDark ? Colors.grey[500] : Colors.grey[400],
               ),
             ),
-            const SizedBox(height: AppConstants.paddingSmall),
-            Container(
-              padding: const EdgeInsets.all(AppConstants.paddingLarge),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.grey[800] : Colors.grey[100],
-                borderRadius: BorderRadius.circular(AppConstants.radiusMedium),
-              ),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.history,
-                    size: 48,
-                    color: isDark ? Colors.grey[600] : Colors.grey[400],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'No recent searches',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: isDark ? Colors.grey[500] : Colors.grey[400],
-                    ),
-                  ),
-                ],
+            const SizedBox(height: 8),
+            Text(
+              'Start searching for places to see them here',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: isDark ? Colors.grey[600] : Colors.grey[500],
               ),
             ),
           ],
@@ -428,35 +476,29 @@ class _SearchScreenState extends State<SearchScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (_recentSearches.isNotEmpty)
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Recent Searches',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        setState(() {
-                          _recentSearches.clear();
-                        });
-                      },
-                      child: const Text('Clear All'),
-                    ),
-                  ],
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Recent Searches',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
                 ),
-                const SizedBox(height: AppConstants.paddingSmall),
-                ..._recentSearches.map(
-                  (place) => _buildRecentItem(theme, isDark, place),
-                ),
-              ],
-            ),
+              ),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _recentSearches.clear();
+                  });
+                },
+                child: const Text('Clear All'),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppConstants.paddingSmall),
+          ..._recentSearches.map(
+            (place) => _buildRecentItem(theme, isDark, place),
+          ),
         ],
       ),
     );
@@ -536,22 +578,68 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildErrorState(ThemeData theme) {
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.error_outline, size: 48, color: Colors.red[300]),
-          const SizedBox(height: AppConstants.paddingMedium),
-          Text(
-            _error!,
-            style: theme.textTheme.bodyMedium?.copyWith(color: Colors.red),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: AppConstants.paddingMedium),
-          ElevatedButton(
-            onPressed: () => _searchLocation(_searchController.text),
-            child: const Text('Retry'),
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              _error?.contains('Network') == true
+                  ? Icons.wifi_off
+                  : Icons.error_outline,
+              size: 64,
+              color: _error?.contains('Network') == true
+                  ? Colors.orange[300]
+                  : Colors.red[300],
+            ),
+            const SizedBox(height: AppConstants.paddingMedium),
+            Text(
+              _error!,
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: _error?.contains('Network') == true
+                    ? Colors.orange[700]
+                    : Colors.red[700],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: AppConstants.paddingLarge),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () =>
+                      _performSearch(_searchController.text.trim()),
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text('Retry'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  onPressed: _clearSearch,
+                  icon: const Icon(Icons.clear, size: 18),
+                  label: const Text('Clear'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -563,20 +651,20 @@ class _SearchScreenState extends State<SearchScreen> {
         children: [
           Icon(
             Icons.search_off,
-            size: 48,
+            size: 64,
             color: theme.textTheme.bodyMedium?.color?.withOpacity(0.3),
           ),
           const SizedBox(height: AppConstants.paddingMedium),
           Text(
             'No results found',
-            style: theme.textTheme.bodyMedium?.copyWith(
+            style: theme.textTheme.titleMedium?.copyWith(
               color: theme.textTheme.bodyMedium?.color?.withOpacity(0.5),
             ),
           ),
           const SizedBox(height: AppConstants.paddingSmall),
           Text(
             'Try searching for a different place',
-            style: theme.textTheme.bodySmall?.copyWith(
+            style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.textTheme.bodySmall?.color?.withOpacity(0.4),
             ),
           ),
