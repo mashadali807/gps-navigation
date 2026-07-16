@@ -13,27 +13,28 @@ import '../models/route_model.dart';
 class MapService {
   // ============ TILE LAYERS ============
 
-  /// Get tile layer for map - FIXED for flutter_map compatibility
+  /// Get tile layer for map – dark mode fixed with CartoDB
   static TileLayer getTileLayer({
     bool darkMode = false,
     bool satellite = false,
     String? customUrl,
   }) {
     String urlTemplate;
+    String attribution;
 
     if (customUrl != null) {
       urlTemplate = customUrl;
+      attribution = '© OpenStreetMap';
     } else if (satellite) {
-      // Use Stadia Maps for satellite-like view
-      urlTemplate =
-          'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png';
-    } else if (darkMode) {
-      // Use Stadia Maps dark theme
-      urlTemplate =
-          'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png';
-    } else {
-      // FIXED: Use the new OSM URL without subdomains
       urlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+      attribution = '© OpenStreetMap contributors';
+    } else if (darkMode) {
+      // CartoDB dark tiles – requires subdomains
+      urlTemplate = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+      attribution = '© OpenStreetMap, © CartoDB';
+    } else {
+      urlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+      attribution = '© OpenStreetMap contributors';
     }
 
     return TileLayer(
@@ -42,17 +43,17 @@ class MapService {
       maxZoom: AppConstants.maxMapZoom,
       minZoom: AppConstants.minMapZoom,
       tileProvider: NetworkTileProvider(),
-      // FIXED: Remove subdomains to avoid warning
-      // subdomains: ['a', 'b', 'c'], // <-- REMOVED
+      // FIXED: non-nullable list; empty for light mode, subdomains for dark mode
+      subdomains: darkMode ? const ['a', 'b', 'c'] : const [],
       retinaMode: true,
       additionalOptions: {
-        'attribution': '© OpenStreetMap contributors',
+        'attribution': attribution,
         'attributionUrl': 'https://www.openstreetmap.org/copyright',
       },
     );
   }
 
-  /// Get tile layer with custom attribution - FIXED
+  /// Get tile layer with custom attribution
   static TileLayer getCustomTileLayer({
     required String urlTemplate,
     String? attribution,
@@ -66,18 +67,14 @@ class MapService {
       maxZoom: maxZoom,
       minZoom: minZoom,
       tileProvider: NetworkTileProvider(),
-      subdomains:
-          subdomains ??
-          const ['a', 'b', 'c'], // Provide default if null // Only if provided
+      subdomains: subdomains ?? const [],
       retinaMode: true,
       additionalOptions: {'attribution': attribution ?? '© OpenStreetMap'},
     );
   }
 
-  /// Get tile layer with Stadia Maps - FIXED (removed unsupported parameters)
+  /// Get tile layer with Stadia Maps (alternative)
   static TileLayer getStadiaTileLayer({bool darkMode = false, String? apiKey}) {
-    // Stadia Maps is free for open-source projects
-    // Get a free API key at: https://stadiamaps.com/
     final urlTemplate = darkMode
         ? 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png'
         : 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png';
@@ -90,14 +87,12 @@ class MapService {
       tileProvider: NetworkTileProvider(),
       retinaMode: true,
       additionalOptions: {
-        'attribution':
-            '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>',
+        'attribution': '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>',
       },
-      // Removed: maxRetries, retryDelay, useCache, cacheKey, cacheMaxAge
     );
   }
 
-  /// Get tile layer with MapBox (requires API key) - FIXED
+  /// Get tile layer with MapBox (requires API key)
   static TileLayer getMapBoxTileLayer({
     required String apiKey,
     bool darkMode = false,
@@ -127,10 +122,7 @@ class MapService {
     if (query.trim().isEmpty) return [];
 
     try {
-      // URL encode the query
       final encodedQuery = Uri.encodeComponent(query.trim());
-
-      // Use OSM Nominatim API with proper parameters
       final url =
           'https://nominatim.openstreetmap.org/search'
           '?q=$encodedQuery'
@@ -183,7 +175,6 @@ class MapService {
     }
   }
 
-  /// Parse OSM result manually (more reliable)
   static SearchResult _parseOSMResult(Map<String, dynamic> json) {
     final address = json['address'] as Map<String, dynamic>?;
 
@@ -229,7 +220,6 @@ class MapService {
 
   // ============ ROUTE SERVICES ============
 
-  /// Get route between two points using OSRM
   static Future<RouteData> getRoute({
     required LatLng start,
     required LatLng end,
@@ -261,7 +251,6 @@ class MapService {
     }
   }
 
-  /// Get route with waypoints
   static Future<List<RouteData>> getRouteWithWaypoints({
     required List<LatLng> waypoints,
     String? profile,
@@ -304,7 +293,6 @@ class MapService {
     }
   }
 
-  /// Parse route response
   static RouteData _parseRouteResponse(Map<String, dynamic> data) {
     final routes = data['routes'] as List?;
     if (routes == null || routes.isEmpty) {
@@ -483,7 +471,6 @@ class MapService {
 
   // ============ GEOCODING SERVICES ============
 
-  /// Reverse geocoding - get address from coordinates
   static Future<String> getAddressFromCoordinates(LatLng position) async {
     try {
       final url =
@@ -516,7 +503,6 @@ class MapService {
     }
   }
 
-  /// Build address from address components
   static String _buildAddressFromComponents(Map<String, dynamic> address) {
     final parts = <String>[];
     final road = address['road'] ?? address['street'] ?? address['pedestrian'];
@@ -540,7 +526,6 @@ class MapService {
 
   // ============ PLACE SERVICES ============
 
-  /// Get place details by ID
   static Future<PlaceModel?> getPlaceDetails(String placeId) async {
     try {
       final url =
@@ -567,7 +552,6 @@ class MapService {
     }
   }
 
-  /// Get nearby places
   static Future<List<SearchResult>> getNearbyPlaces({
     required LatLng center,
     double radius = 1000,
@@ -616,10 +600,10 @@ class MapService {
             'osm': {
               'type': 'raster',
               'tiles': [
-                'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png',
+                'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
               ],
               'tileSize': 256,
-              'attribution': '© OpenStreetMap',
+              'attribution': '© OpenStreetMap, © CartoDB',
               'maxzoom': 19,
             },
           },
